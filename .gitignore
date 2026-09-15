@@ -3,3 +3,5 @@ __pycache__/
 sources/lb/lb
 sources/loadgen/loadgen
 TutorialPPTs/
+deployed/*/server/package-lock.json
+deployed/*/client/dist/assets/
