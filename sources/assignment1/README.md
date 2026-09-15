@@ -13,5 +13,5 @@ Nothing here is deployed. What replaced each of them:
 | `loadgen_main.go`, `chatload_main.js` | `sources/loadgen/main.go` |
 | `start_chat.sh`, `start_lb.sh` | `sources/ops/`, which supervises rather than backgrounds |
 | `failover_demo.sh` | `sources/ops/failover.sh` |
-| `chat_server.patch`, `chat_server_patched.js` | `sources/server/`, the full deployed tree |
+| `chat_server.patch`, `chat_server_patched.js` | `sources/server/` (the files `deploy.sh` manages) and `deployed/sys2/` (the full chat app as it actually runs) |
 | `lbstatus.py` | `curl .../lb/status` |

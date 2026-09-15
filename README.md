@@ -346,7 +346,7 @@ is restarted.
 ```
 sources/lb/main.go                the load balancer
 sources/loadgen/main.go           the load generator
-sources/server/                   the chat back end, as deployed
+sources/server/                   the files deploy.sh manages on the chat back ends
     server.js                       startup and wiring
     src/api/router.js               /message and /feed
     src/api/feedStore.js            the in-memory room /feed is served from
@@ -359,6 +359,16 @@ sources/ops/                      deploy, supervise, stop, experiment, sweep,
 sources/tools/                    replica set admin, migration, cleanup
 sources/cross_replica_test.js     the browser chat, across all three back ends
 sources/assignment1/              the previous assignment's sources
+deployed/                         the actual code running on each container,
+                                  pulled straight from the four systems
+    sys1/lb.env                     the load balancer's live runtime config
+    sys2/, sys3/, sys4/             each chat replica's full app: the files
+                                  above plus everything deploy.sh does not
+                                  touch (crypto, presence, socket handlers,
+                                  validation, tests, the browser client) —
+                                  inherited from the first assignment's
+                                  deployment and otherwise untracked. Built
+                                  client bundle and npm lockfile are gitignored.
 results/                          every measurement this report quotes
 results/assignment1/              the previous assignment's results, untouched
 report/                           template, stylesheet, figures, build scripts
