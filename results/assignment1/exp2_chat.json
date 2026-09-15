@@ -1,0 +1,13 @@
+{
+  "experiment": "chat-3-backends",
+  "requests": 600,
+  "concurrency": 30,
+  "successful": 600,
+  "failed": 0,
+  "throughput_rps": 23.17,
+  "dropout_percent": 0,
+  "p50_ms": 1005.477,
+  "p95_ms": 2488.133,
+  "p99_ms": 2951.901,
+  "elapsed_seconds": 25.893
+}

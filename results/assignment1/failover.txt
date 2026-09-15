@@ -1,0 +1,48 @@
+### 1. all three backends healthy ###
+  http://172.17.0.31:4000    alive=True  served=0
+  http://172.17.0.32:4000    alive=True  served=0
+  http://172.17.0.33:4000    alive=True  served=0
+
+### 2. six requests, all backends up, strict round robin ###
+  request 1  -> 200  served by 172.17.0.31:4000
+  request 2  -> 200  served by 172.17.0.32:4000
+  request 3  -> 200  served by 172.17.0.33:4000
+  request 4  -> 200  served by 172.17.0.31:4000
+  request 5  -> 200  served by 172.17.0.32:4000
+  request 6  -> 200  served by 172.17.0.33:4000
+
+### 3. stop the chat server on Sys3 (172.17.0.32) ###
+  killed chat-2 (pid 20068) on Sys3
+  waiting 8s. The health check runs every 2s and needs 3 misses in a row.
+  http://172.17.0.31:4000    alive=True  served=2
+  http://172.17.0.32:4000    alive=False served=2
+  http://172.17.0.33:4000    alive=True  served=2
+
+### 4. six more requests with Sys3 down, no failures, Sys3 skipped ###
+  request 1  -> 200  served by 172.17.0.31:4000
+  request 2  -> 200  served by 172.17.0.33:4000
+  request 3  -> 200  served by 172.17.0.31:4000
+  request 4  -> 200  served by 172.17.0.33:4000
+  request 5  -> 200  served by 172.17.0.31:4000
+  request 6  -> 200  served by 172.17.0.33:4000
+
+### 5. restart the chat server on Sys3 ###
+UP after 1s
+{"status":"ok","backend":"chat-2","uptimeSeconds":1,"onlineUsers":0}
+  waiting 6s...
+  http://172.17.0.31:4000    alive=True  served=5
+  http://172.17.0.32:4000    alive=True  served=2
+  http://172.17.0.33:4000    alive=True  served=5
+
+### 6. six requests after recovery, Sys3 is back in the rotation ###
+  request 1  -> 200  served by 172.17.0.31:4000
+  request 2  -> 200  served by 172.17.0.32:4000
+  request 3  -> 200  served by 172.17.0.33:4000
+  request 4  -> 200  served by 172.17.0.31:4000
+  request 5  -> 200  served by 172.17.0.32:4000
+  request 6  -> 200  served by 172.17.0.33:4000
+
+### 7. load balancer log ###
+2026/08/24 15:41:06 http: TLS handshake error from 10.50.19.28:37334: remote error: tls: unknown certificate
+2026/08/24 15:41:39 http://172.17.0.32:4000 marked down after 3 failed checks: Get "http://172.17.0.32:4000/health": dial tcp 172.17.0.32:4000: connect: connection refused
+2026/08/24 15:41:43 http://172.17.0.32:4000 is back up

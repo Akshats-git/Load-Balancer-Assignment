@@ -1,0 +1,50 @@
+{
+  "duration_s": 20.71,
+  "experiment": "fine020-r2",
+  "feed_latency_ms": {
+    "count": 891,
+    "max": 810.405,
+    "mean": 31.151,
+    "p50": 20.186,
+    "p90": 38.692,
+    "p95": 66.869,
+    "p99": 326.102
+  },
+  "feed_ratio": 0.2,
+  "feed_reads": 891,
+  "interval_max_ms": 10,
+  "interval_min_ms": 0,
+  "latency_ms": {
+    "count": 4511,
+    "max": 1473.704,
+    "mean": 532.982,
+    "p50": 551.314,
+    "p90": 944.621,
+    "p95": 982.195,
+    "p99": 1042.9
+  },
+  "measured_s": 16.71,
+  "message_length_max": 400,
+  "message_length_min": 20,
+  "messages_posted": 3620,
+  "non_200_responses": 0,
+  "per_backend": {
+    "chat-1": 2003,
+    "chat-2": 1938,
+    "chat-3": 570
+  },
+  "post_latency_ms": {
+    "count": 3620,
+    "max": 1473.704,
+    "mean": 656.499,
+    "p50": 723.6,
+    "p90": 959.542,
+    "p95": 990.681,
+    "p99": 1051.459
+  },
+  "requests": 4511,
+  "throughput_rps": 269.9,
+  "transport_errors": 0,
+  "url": "http://10.1.75.53:4229",
+  "users": 150
+}

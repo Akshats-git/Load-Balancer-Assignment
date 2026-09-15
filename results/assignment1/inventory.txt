@@ -1,0 +1,19 @@
+### deployment inventory, 2026-08-24 15:46 UTC ###
+all four containers: 512 MB RAM, 1 vCPU (cgroup limits), Ubuntu 24.04.4 LTS
+
+--- stu68_sys1   172.17.0.30 ---
+  listening : *:3000 0.0.0.0:27017 
+  pid 80946   239 MB  /home/student/mongodb/bin/mongod --dbpath /home/student/mongo-data
+  pid 89206    23 MB  /home/student/lb/lb -listen :3000
+
+--- stu68_sys2   172.17.0.31 ---
+  listening : *:4000 
+  pid 20079    90 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js
+
+--- stu68_sys3   172.17.0.32 ---
+  listening : *:4000 
+  pid 20208    84 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js
+
+--- stu68_sys4   172.17.0.33 ---
+  listening : *:4000 
+  pid 19617    96 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js

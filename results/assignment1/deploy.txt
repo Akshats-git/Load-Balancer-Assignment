@@ -1,0 +1,25 @@
+$ ssh stu68_sys2 'bash ~/start-chat.sh chat-1'
+UP after 1s
+{"status":"ok","backend":"chat-1","uptimeSeconds":1,"onlineUsers":0}
+
+$ for h in sys2 sys3 sys4; do ssh $h 'cat ~/logs/chat.log'; done
+--- stu68_sys2 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-1)
+Chat server chat-1 running on http://0.0.0.0:4000
+--- stu68_sys3 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-2)
+Chat server chat-2 running on http://0.0.0.0:4000
+--- stu68_sys4 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-3)
+Chat server chat-3 running on http://0.0.0.0:4000
+
+$ ssh stu68_sys1 '~/mongodb/bin/mongod ... --replSet rs0'   # replica set status
+set: rs0  members: 172.17.0.30:27017 = PRIMARY
+messages stored: 121
+a stored record is ciphertext, not text:
+  senderId   : aarav
+  ciphertext : ba/SPIBscbGArOc6R0e94Da019wUxQi1JWx4eyLufF+L...
+  signature  : bfpTMhCMcnmtQLEB1wusTeWM9tLzcPqVHZuBTefCKvQJ...

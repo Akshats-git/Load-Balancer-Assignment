@@ -1,0 +1,30 @@
+$ curl -s -X POST http://10.1.75.53:4229/message -H 'Content-Type: application/json' \
+     -d '{"client-name":"aarav","msg":"posted as json"}'
+{"ok":true,"id":"lb-5fe069ada345-6r39","client-name":"aarav","msg":"posted as json","ts":1788943866977,"duplicate":false,"backend":"chat-3"}
+$ curl -s -X POST http://10.1.75.53:4229/message -d 'client-name=meera&msg=posted as a form'
+{"ok":true,"id":"lb-5fe069ada345-6r3a","client-name":"meera","msg":"posted as a form","ts":1788943867022,"duplicate":false,"backend":"chat-2"}
+$ curl -s --get 'http://10.1.75.53:4229/message' \
+     --data-urlencode 'client-name=rohan' --data-urlencode 'msg=posted as a query string'
+{"ok":true,"id":"lb-5fe069ada345-6r3b","client-name":"rohan","msg":"posted as a query string","ts":1788943867053,"duplicate":false,"backend":"chat-2"}
+$ curl -s 'http://10.1.75.53:4229/feed?limit=3' | python3 -m json.tool
+[
+    {
+        "id": "lb-5fe069ada345-6r39",
+        "client-name": "aarav",
+        "msg": "posted as json",
+        "ts": 1788943866977
+    },
+    {
+        "id": "lb-5fe069ada345-6r3a",
+        "client-name": "meera",
+        "msg": "posted as a form",
+        "ts": 1788943867022
+    },
+    {
+        "id": "lb-5fe069ada345-6r3b",
+        "client-name": "rohan",
+        "msg": "posted as a query string",
+        "ts": 1788943867053
+    }
+]
+

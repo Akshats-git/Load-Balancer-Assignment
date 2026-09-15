@@ -1,0 +1,13 @@
+{
+  "experiment": "http-1-backend",
+  "requests": 5000,
+  "concurrency": 40,
+  "successful": 5000,
+  "failed": 0,
+  "throughput_rps": 611.894862329349,
+  "dropout_percent": 0,
+  "p50_ms": 46.381,
+  "p95_ms": 115.221,
+  "p99_ms": 554.138,
+  "elapsed_seconds": 8.171338424
+}

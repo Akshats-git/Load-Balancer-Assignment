@@ -1,0 +1,12 @@
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:40908->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:40974->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 172.17.0.32:4000 marked DOWN after 3 failures: read tcp 172.17.0.30:41144->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41144->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41026->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:51050->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41304->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41748->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41956->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41928->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41816->172.17.0.32:4000: read: connection reset by peer
+2026/09/13 17:02:07 retrying POST /message on 172.17.0.31:4000 after 172.17.0.32:4000 failed: read tcp 172.17.0.30:41668->172.17.0.32:4000: read: connection reset by peer

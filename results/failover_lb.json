@@ -1,0 +1,25 @@
+{
+  "abandoned": 20412,
+  "failed": 64,
+  "memory": {
+    "gc_cycles": 182,
+    "goroutines": 732,
+    "heap_mb": 18.9,
+    "limit_mb": 204,
+    "stacks_mb": 4.5,
+    "sys_mb": 137.4
+  },
+  "p50_ms": 167.86,
+  "p95_ms": 366.072,
+  "p99_ms": 481.362,
+  "per_backend": {
+    "172.17.0.31:4000": 23538,
+    "172.17.0.32:4000": 8912,
+    "172.17.0.33:4000": 5591
+  },
+  "retried": 22,
+  "samples": 38019,
+  "success": 37955,
+  "switches": 34,
+  "total": 38019
+}

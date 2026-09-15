@@ -1,0 +1,33 @@
+Usage of /home/akshat/load-balancer-assignment/sources/loadgen/loadgen:
+  -duration duration
+    	how long to keep sending (default 1m0s)
+  -experiment string
+    	name recorded in the output (default "run")
+  -feed-limit int
+    	if set, ask /feed for only this many recent messages
+  -feed-ratio float
+    	fraction of requests that read /feed instead of posting (default 0.2)
+  -max-interval duration
+    	longest pause between one user's messages (default 250ms)
+  -max-len int
+    	longest message, in characters (default 400)
+  -min-interval duration
+    	shortest pause between one user's messages (default 20ms)
+  -min-len int
+    	shortest message, in characters (default 20)
+  -out string
+    	write the summary to this JSON file
+  -seed int
+    	random seed, so a run can be repeated (default 1)
+  -timeout duration
+    	per request timeout (default 10s)
+  -timeseries string
+    	write per-second numbers to this CSV file
+  -url string
+    	load balancer base url (default "http://10.1.75.53:4229")
+  -users int
+    	number of concurrent virtual users (default 40)
+  -verify
+    	afterwards, check every message sent appears in /feed exactly once
+  -warmup duration
+    	discard results from this long at the start (default 3s)

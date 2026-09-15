@@ -1,0 +1,8 @@
+GET /health, 5000 requests at concurrency 40, three runs of each configuration.
+
+one back end     611.9   725.8   729.3  rps    median 725.8
+three back ends  643.1   602.3   865.6  rps    median 643.1
+
+The two ranges overlap completely, so this workload does not separate the two
+configurations. The spread inside one configuration is wider than the gap
+between the medians. The report uses the median run of each set.

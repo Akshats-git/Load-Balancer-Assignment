@@ -1,0 +1,11 @@
+$ curl -s -X POST http://10.1.75.53:4229/message -H 'Content-Type: application/json' \
+     -d '{"client-name":"aarav","msg":"sent once","id":"report-demo-1788943867"}'
+{"ok":true,"id":"report-demo-1788943867","client-name":"aarav","msg":"sent once","ts":1788943867121,"duplicate":false,"backend":"chat-2"}
+# the same request again, as a retrying client would send it
+$ curl -s -X POST http://10.1.75.53:4229/message -H 'Content-Type: application/json' \
+     -d '{"client-name":"aarav","msg":"sent once","id":"report-demo-1788943867"}'
+{"ok":true,"id":"report-demo-1788943867","client-name":"aarav","msg":"sent once","ts":1788943867172,"duplicate":true,"backend":"chat-1"}
+$ curl -s http://10.1.75.53:4229/feed | python3 -c \
+     'import json,sys; print(sum(1 for m in json.load(sys.stdin) if m["id"] == "report-demo-1788943867"), "copies in the feed")'
+1 copies in the feed
+

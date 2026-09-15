@@ -1,0 +1,31 @@
+### deployment inventory, 2026-09-09 08:51 UTC ###
+all four containers: 512 MB RAM, 1 vCPU (cgroup enforced), Ubuntu 24.04
+
+--- stu68_sys1   172.17.0.30 ---
+  listening : 22 3000 4000 5000 
+     158 MB  ./.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 5000 --wo...
+      19 MB  /home/student/lb/lb -listen :4000 -tls-listen :3000 -tls-cert /home/studen...
+  memory    : 292 MB of 512 MB
+
+--- stu68_sys2   172.17.0.31 ---
+  listening : 22 4000 
+      83 MB  /home/student/node/bin/node --max-old-space-size=300 --v8-pool-size=2 --en...
+  memory    : 283 MB of 512 MB
+
+--- stu68_sys3   172.17.0.32 ---
+  listening : 22 4000 
+      82 MB  /home/student/node/bin/node --max-old-space-size=300 --v8-pool-size=2 --en...
+  memory    : 290 MB of 512 MB
+
+--- stu68_sys4   172.17.0.33 ---
+  listening : 22 4000 27017 
+     338 MB  /home/student/mongodb/bin/mongod --dbpath /home/student/mongo-data --bind_...
+      79 MB  /home/student/node/bin/node --max-old-space-size=300 --v8-pool-size=2 --en...
+  memory    : 491 MB of 512 MB
+
+--- database ---
+set: rs0
+  172.17.0.33:27017  PRIMARY
+  _id_: {"_id":1}
+  roomId_1__id_1: {"roomId":1,"_id":1}
+  msgId_unique: {"msgId":1} unique

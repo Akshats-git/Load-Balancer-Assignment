@@ -1,0 +1,6 @@
+### Sys4 CPU split under load, 2026-09-09 08:46 UTC ###
+measured over 20s with 150 users against the balancer
+
+  chat-3 (Node)   0.13 cores
+  mongod          0.80 cores
+  together        0.93 of the 1.00 core this container has

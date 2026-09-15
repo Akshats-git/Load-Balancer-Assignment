@@ -1,0 +1,10 @@
+{
+  "experiment": "failover",
+  "started_at": 1789318907.057656729,
+  "finished_at": 1789318968.130774202,
+  "killed_at": 1789318927.064014174,
+  "restored_at": 1789318948.313533211,
+  "victim": "chat-2",
+  "victim_host": "stu68_sys3",
+  "duration_s": 60
+}

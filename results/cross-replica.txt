@@ -1,0 +1,17 @@
+ananya is pinned to backend 0 -> 172.17.0.31:4000
+vikram is pinned to backend 2 -> 172.17.0.33:4000
+ananya logged in
+vikram logged in
+ananya sent: "does this reach the other back end"
+vikram received: "does this reach the other back end"
+  message id      : 6aa11bc95a4a15e8d990abb4
+  signature check : valid
+  stored ciphertext (first 32 chars): mF7n92O0ZBmp5WLxaioxT5L3X++kCxVP...
+meera  is pinned to backend 1 -> 172.17.0.32:4000
+meera loaded 100 messages of history from the shared database
+  ananya's message present : yes
+  decrypted text           : "does this reach the other back end"
+  integrity verdict        : ok
+  signature verdict        : valid
+
+RESULT: PASS. Chat works across all three back ends behind the load balancer.
