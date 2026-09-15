@@ -1,0 +1,1000 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Load Balancer Report, Akshat Gupta 12340160</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="eyebrow">Computer Systems Design · CS559</div>
+
+<h1>Load Balancer in Go for the Group Chat Application</h1>
+<p class="subtitle">A reverse proxy on Sys1 with round robin scheduling and health checks, running in front of the
+group chat back end from the previous assignment on Sys2, Sys3 and Sys4.</p>
+
+<div class="meta">
+  <div><dt>Student</dt><dd>Akshat Gupta</dd></div>
+  <div><dt>Roll number</dt><dd>12340160</dd></div>
+  <div><dt>Systems</dt><dd>stu68_sys1 to sys4</dd></div>
+  <div><dt>Date</dt><dd>24 August 2026</dd></div>
+</div>
+
+<div class="urlbox">
+  <div class="urllabel">Live application URL</div>
+  <a class="urllink" href="https://10.1.75.53:3229">https://10.1.75.53:3229</a>
+  <p class="urlnote">This is the group chat application from the previous assignment, served through the load
+    balancer on Sys1. Every request is passed to one of the three back ends on Sys2, Sys3 and Sys4. The
+    certificate is self signed, so the browser shows a warning on the first visit. Click Advanced and then
+    Proceed. HTTPS is needed because the chat client signs its login with WebCrypto, and browsers only allow
+    WebCrypto on a secure origin.</p>
+</div>
+
+<h2><span class="num">1.</span>Assigned systems</h2>
+
+<p>Four containers run on one host and share a Docker bridge network. Each has 512 MB of RAM and one vCPU.
+That limit is why a single back end fills up so quickly.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>System</th><th>Role</th><th>Internal IP</th><th>App port</th><th>SSH</th><th>Public address</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td class="mono">stu68_sys1</td><td>Load balancer and MongoDB</td><td class="mono">172.17.0.30</td><td class="mono">3000</td><td class="mono">-p 2229</td><td class="mono">https://10.1.75.53:3229</td></tr>
+    <tr><td class="mono">stu68_sys2</td><td>Back end <span class="mono">chat-1</span></td><td class="mono">172.17.0.31</td><td class="mono">4000</td><td class="mono">-p 2230</td><td class="mono">http://10.1.75.53:4230</td></tr>
+    <tr><td class="mono">stu68_sys3</td><td>Back end <span class="mono">chat-2</span></td><td class="mono">172.17.0.32</td><td class="mono">4000</td><td class="mono">-p 2231</td><td class="mono">http://10.1.75.53:4231</td></tr>
+    <tr><td class="mono">stu68_sys4</td><td>Back end <span class="mono">chat-3</span></td><td class="mono">172.17.0.33</td><td class="mono">4000</td><td class="mono">-p 2232</td><td class="mono">http://10.1.75.53:4232</td></tr>
+  </tbody>
+</table>
+
+<p>SSH goes to <span class="mono">student@10.1.75.53</span> on the port shown. Application ports follow the lab
+rule that an internal port is published on a host port taken from the SSH port. The load balancer listens on
+port 3000 inside Sys1, so it is reachable from outside on port 3229. This is why no SSH tunnel was needed.</p>
+
+<figure>
+<pre class="term compact">### deployment inventory, 2026-08-24 15:46 UTC ###
+all four containers: 512 MB RAM, 1 vCPU (cgroup limits), Ubuntu 24.04.4 LTS
+
+--- stu68_sys1   172.17.0.30 ---
+  listening : *:3000 0.0.0.0:27017 
+  pid 80946   239 MB  /home/student/mongodb/bin/mongod --dbpath /home/student/mongo-data
+  pid 89206    23 MB  /home/student/lb/lb -listen :3000
+
+--- stu68_sys2   172.17.0.31 ---
+  listening : *:4000 
+  pid 20079    90 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js
+
+--- stu68_sys3   172.17.0.32 ---
+  listening : *:4000 
+  pid 20208    84 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js
+
+--- stu68_sys4   172.17.0.33 ---
+  listening : *:4000 
+  pid 19617    96 MB  /home/student/node/bin/node --env-file-if-exists=.env server.js</pre>
+<figcaption><b>Figure 1.</b> The four systems as deployed. Sys1 runs mongod and the load balancer. Sys2, Sys3 and
+Sys4 each run one Node process serving the chat back end.</figcaption>
+</figure>
+
+<h2><span class="num">2.</span>What was built</h2>
+
+<p>The back end for this assignment is the group chat application from the previous assignment. It is the
+persistent encrypted chat from <span class="mono">csd-group-chat</span>, running as three copies instead of the
+simple HTTP server used in the tutorial slides. A stateless server would work behind a round robin proxy without
+changes. A chat server does not, so three things were needed.</p>
+
+<ol>
+  <li><b>One shared database.</b> All three copies use the same MongoDB on Sys1. Chat history and the stored
+  public keys are therefore the same wherever a client lands.</li>
+  <li><b>A shared broadcast channel.</b> Socket.IO keeps connections in the memory of one process. A message sent
+  to the copy on Sys2 would never reach a client on Sys4. The official MongoDB adapter gives the three processes
+  a channel to publish broadcasts on.</li>
+  <li><b>Sticky sessions in the load balancer.</b> The Socket.IO handshake is a set of HTTP polls that only one
+  process can answer. Round robin breaks it, so the load balancer keeps a client on one back end using a
+  cookie.</li>
+</ol>
+
+<table>
+  <thead><tr><th>Component</th><th>Where it runs</th><th>Implementation</th></tr></thead>
+  <tbody>
+    <tr><td>Load balancer</td><td>Sys1, port 3000</td><td>Go, <span class="mono">httputil.ReverseProxy</span>, round robin with health checks, sticky cookie and TLS</td></tr>
+    <tr><td>Chat back end, three copies</td><td>Sys2, Sys3, Sys4, port 4000</td><td>Node 24 running the group chat <span class="mono">server.js</span> with the Socket.IO MongoDB adapter</td></tr>
+    <tr><td>Database</td><td>Sys1, port 27017</td><td>MongoDB 8.0 as a single node replica set</td></tr>
+    <tr><td>Load generators</td><td>Local PC</td><td>Go worker pool for plain HTTP, Node worker pool for real chat sessions</td></tr>
+  </tbody>
+</table>
+
+<div class="diagram">
+<svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="The load generator on the local PC sends load to the load balancer on
+                 Sys1, which round robins across three chat back ends on Sys2, Sys3 and
+                 Sys4. All three share one MongoDB on Sys1.">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a929b"/>
+    </marker>
+    <style>
+      .box   { fill:#ffffff; stroke:#c3cad2; stroke-width:1.2; rx:5; }
+      .lbbox { fill:#eef4f8; stroke:#14496b; stroke-width:1.6; rx:5; }
+      .dbbox { fill:#fbf7ef; stroke:#a98a4e; stroke-width:1.2; rx:5; }
+      .t     { font-family:'Source Sans 3',Helvetica,sans-serif; font-size:11.5px; fill:#16191d; font-weight:600; }
+      .s     { font-family:'JetBrains Mono',monospace;           font-size:9px;    fill:#767d87; }
+      .lbl   { font-family:'Source Sans 3',Helvetica,sans-serif; font-size:9px;    fill:#767d87; }
+      .ln    { stroke:#8a929b; stroke-width:1.2; fill:none; marker-end:url(#ar); }
+      .lnd   { stroke:#a98a4e; stroke-width:1;   fill:none; stroke-dasharray:3 3; }
+    </style>
+  </defs>
+
+  <rect class="box" x="8" y="78" width="128" height="46"/>
+  <text class="t" x="22" y="98">Local PC</text>
+  <text class="s" x="22" y="113">load generators</text>
+
+  <line class="ln" x1="140" y1="101" x2="212" y2="101"/>
+  <text class="lbl" x="146" y="94">HTTPS :3229</text>
+
+  <rect class="lbbox" x="216" y="70" width="150" height="62"/>
+  <text class="t" x="232" y="92">Sys1, Load Balancer</text>
+  <text class="s" x="232" y="107">172.17.0.30:3000</text>
+  <text class="s" x="232" y="120">round robin + health</text>
+
+  <line class="ln" x1="370" y1="88"  x2="556" y2="42"/>
+  <line class="ln" x1="370" y1="101" x2="556" y2="101"/>
+  <line class="ln" x1="370" y1="114" x2="556" y2="160"/>
+
+  <rect class="box" x="560" y="20" width="192" height="44"/>
+  <text class="t" x="574" y="39">Sys2, chat-1</text>
+  <text class="s" x="574" y="53">172.17.0.31:4000</text>
+
+  <rect class="box" x="560" y="79" width="192" height="44"/>
+  <text class="t" x="574" y="98">Sys3, chat-2</text>
+  <text class="s" x="574" y="112">172.17.0.32:4000</text>
+
+  <rect class="box" x="560" y="138" width="192" height="44"/>
+  <text class="t" x="574" y="157">Sys4, chat-3</text>
+  <text class="s" x="574" y="171">172.17.0.33:4000</text>
+
+  <rect class="dbbox" x="216" y="163" width="150" height="44"/>
+  <text class="t" x="232" y="182">MongoDB (rs0)</text>
+  <text class="s" x="232" y="196">172.17.0.30:27017</text>
+
+  <path class="lnd" d="M560 42  C 470 42, 420 150, 368 178"/>
+  <path class="lnd" d="M560 101 C 470 101, 430 165, 368 182"/>
+  <path class="lnd" d="M560 160 C 480 160, 430 180, 368 186"/>
+  <text class="lbl" x="392" y="209">shared history, keys and the Socket.IO broadcast channel</text>
+</svg>
+</div>
+
+<h2><span class="num">3.</span>Load balancer code (Sys1)</h2>
+
+<p>The design follows the tutorial. There is a list of backend structs, each holding a reverse proxy. A mutex
+protects the round robin index. A background loop checks health. The endpoints
+<span class="mono">/lb/status</span>, <span class="mono">/lb/metrics</span> and <span class="mono">/lb/reset</span>
+allow the experiments to be run again without restarting the process. Four things were added for this
+deployment.</p>
+
+<table>
+  <thead><tr><th>Addition</th><th>Reason</th></tr></thead>
+  <tbody>
+    <tr><td><b>Sticky cookie</b><br><span class="mono">lb_backend</span></td><td>The Socket.IO handshake spans several requests and only one process can answer them. A client with no cookie is round robined and given one. A client with a cookie keeps its back end until that back end dies, and then falls back to round robin.</td></tr>
+    <tr><td><b>Connection pool</b><br><span class="mono">MaxIdleConnsPerHost: 256</span></td><td>The default transport keeps only two idle connections per host. Above a low rate almost every request opened a new TCP connection. That held the proxy at 443 req/s while the back ends served 1244 req/s on their own. Fixing it raised the proxy to 674 req/s on the same test.</td></tr>
+    <tr><td><b>TLS</b><br><span class="mono">-tls-cert</span> and <span class="mono">-tls-key</span></td><td>The chat client signs its login with WebCrypto. Browsers only allow WebCrypto on a secure origin. Over plain HTTP the app loads but nobody can log in.</td></tr>
+    <tr><td><b>Three failed checks before marking down</b></td><td>One slow reply is not a dead server. A back end is only removed after three failed checks in a row.</td></tr>
+  </tbody>
+</table>
+
+<div class="note plain">
+  <strong>Round robin is still what the experiments measure.</strong> Both load generators run without a cookie
+  jar, so all of their requests take the round robin path. Stickiness only affects browsers and Socket.IO
+  clients. This is why the split across back ends in Section 7 comes out even.
+</div>
+
+<figure class="listing">
+<pre>// Reverse proxy for Sys1, in front of the chat servers on Sys2, Sys3 and Sys4.
+// Requests without the sticky cookie are round robined. Requests with it stay
+// on the backend named in the cookie.
+package main
+
+import (
+	&quot;bufio&quot;
+	&quot;encoding/json&quot;
+	&quot;flag&quot;
+	&quot;log&quot;
+	&quot;net&quot;
+	&quot;net/http&quot;
+	&quot;net/http/httputil&quot;
+	&quot;net/url&quot;
+	&quot;sort&quot;
+	&quot;strconv&quot;
+	&quot;strings&quot;
+	&quot;sync&quot;
+	&quot;time&quot;
+)
+
+type Backend struct {
+	ID     int
+	URL    *url.URL
+	Proxy  *httputil.ReverseProxy
+	Alive  bool
+	Count  int // requests sent here by round robin
+	Sticky int // requests sent here because of the cookie
+	fails  int // failed health checks in a row
+}
+
+var (
+	mu        sync.Mutex
+	backends  []*Backend
+	current   int // round robin position
+	total     int
+	success   int
+	failed    int
+	latencies []time.Duration
+	sticky    bool
+)
+
+const stickyCookie = &quot;lb_backend&quot;
+
+// picks the next alive backend, round robin
+func nextBackend() *Backend {
+	mu.Lock()
+	defer mu.Unlock()
+
+	for i := 0; i &lt; len(backends); i++ {
+		b := backends[current]
+		current = (current + 1) % len(backends)
+		if b.Alive {
+			b.Count++
+			return b
+		}
+	}
+	return nil // everything is down
+}
+
+// Returns nil if the cookie is missing or its backend is down, so the caller
+// falls back to round robin.
+func stickyBackend(r *http.Request) *Backend {
+	if !sticky {
+		return nil
+	}
+
+	c, err := r.Cookie(stickyCookie)
+	if err != nil {
+		return nil
+	}
+
+	id, err := strconv.Atoi(c.Value)
+	if err != nil || id &lt; 0 || id &gt;= len(backends) {
+		return nil
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	b := backends[id]
+	if !b.Alive {
+		return nil
+	}
+
+	b.Sticky++
+	return b
+}
+
+func record(d time.Duration, ok bool) {
+	mu.Lock()
+	total++
+	if ok {
+		success++
+		latencies = append(latencies, d)
+	} else {
+		failed++
+	}
+	mu.Unlock()
+}
+
+// wraps ResponseWriter to capture the status code
+type recorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *recorder) WriteHeader(c int) {
+	r.code = c
+	r.ResponseWriter.WriteHeader(c)
+}
+
+// lets websocket upgrades through
+func (r *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return r.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	b := stickyBackend(r)
+	pinned := b != nil
+
+	if b == nil {
+		b = nextBackend()
+	}
+
+	if b == nil {
+		record(time.Since(start), false)
+		http.Error(w, &quot;no backend available&quot;, http.StatusServiceUnavailable)
+		return
+	}
+
+	// Must be set before ServeHTTP. ReverseProxy overwrites this header map.
+	if sticky &amp;&amp; !pinned {
+		http.SetCookie(w, &amp;http.Cookie{
+			Name:   stickyCookie,
+			Value:  strconv.Itoa(b.ID),
+			Path:   &quot;/&quot;,
+			MaxAge: 3600,
+		})
+	}
+
+	rec := &amp;recorder{w, http.StatusOK}
+	b.Proxy.ServeHTTP(rec, r)
+
+	record(time.Since(start), rec.code &lt; 500)
+}
+
+// marks a backend down after three failed checks in a row
+func healthCheck(path string, every time.Duration) {
+	client := &amp;http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &amp;http.Transport{DisableKeepAlives: true},
+	}
+
+	for {
+		for _, b := range backends {
+			resp, err := client.Get(b.URL.String() + path)
+			good := err == nil &amp;&amp; resp.StatusCode &lt; 400
+			if resp != nil {
+				resp.Body.Close()
+			}
+
+			mu.Lock()
+			if good {
+				b.fails = 0
+				if !b.Alive {
+					log.Printf(&quot;%s is back up&quot;, b.URL)
+					b.Alive = true
+				}
+			} else {
+				b.fails++
+				if b.fails &gt;= 3 &amp;&amp; b.Alive {
+					log.Printf(&quot;%s marked down after %d failed checks: %v&quot;, b.URL, b.fails, err)
+					b.Alive = false
+				}
+			}
+			mu.Unlock()
+		}
+		time.Sleep(every)
+	}
+}
+
+func percentile(sorted []time.Duration, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	i := int(p / 100 * float64(len(sorted)))
+	if i &gt;= len(sorted) {
+		i = len(sorted) - 1
+	}
+	return float64(sorted[i].Microseconds()) / 1000
+}
+
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	out := []map[string]interface{}{}
+	for _, b := range backends {
+		out = append(out, map[string]interface{}{
+			&quot;id&quot;:     b.ID,
+			&quot;url&quot;:    b.URL.String(),
+			&quot;alive&quot;:  b.Alive,
+			&quot;served&quot;: b.Count,
+			&quot;sticky&quot;: b.Sticky,
+		})
+	}
+	writeJSON(w, map[string]interface{}{
+		&quot;sticky_sessions&quot;: sticky,
+		&quot;backends&quot;:        out,
+	})
+}
+
+func metricsHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	sorted := make([]time.Duration, len(latencies))
+	copy(sorted, latencies)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] &lt; sorted[j] })
+
+	perBackend := map[string]int{}
+	for _, b := range backends {
+		perBackend[b.URL.Host] = b.Count
+	}
+
+	writeJSON(w, map[string]interface{}{
+		&quot;total&quot;:       total,
+		&quot;success&quot;:     success,
+		&quot;failed&quot;:      failed,
+		&quot;p50_ms&quot;:      percentile(sorted, 50),
+		&quot;p95_ms&quot;:      percentile(sorted, 95),
+		&quot;p99_ms&quot;:      percentile(sorted, 99),
+		&quot;per_backend&quot;: perBackend,
+	})
+}
+
+// clears the counters between experiments
+func resetHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	total, success, failed = 0, 0, 0
+	latencies = nil
+	for _, b := range backends {
+		b.Count = 0
+		b.Sticky = 0
+	}
+	mu.Unlock()
+	w.Write([]byte(&quot;reset done\n&quot;))
+}
+
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set(&quot;Content-Type&quot;, &quot;application/json&quot;)
+	e := json.NewEncoder(w)
+	e.SetIndent(&quot;&quot;, &quot;  &quot;)
+	e.Encode(v)
+}
+
+func main() {
+	listen := flag.String(&quot;listen&quot;, &quot;:8080&quot;, &quot;port to listen on&quot;)
+	list := flag.String(&quot;backends&quot;, &quot;&quot;, &quot;comma separated backend urls&quot;)
+	healthPath := flag.String(&quot;health-path&quot;, &quot;/health&quot;, &quot;path to check on backends&quot;)
+	useSticky := flag.Bool(&quot;sticky&quot;, true, &quot;pin a client to one backend with a cookie&quot;)
+	// HTTPS is needed because the chat client uses WebCrypto to log in.
+	tlsCert := flag.String(&quot;tls-cert&quot;, &quot;&quot;, &quot;PEM certificate, turns on HTTPS with -tls-key&quot;)
+	tlsKey := flag.String(&quot;tls-key&quot;, &quot;&quot;, &quot;PEM private key&quot;)
+	flag.Parse()
+
+	if *list == &quot;&quot; {
+		log.Fatal(&quot;give me some backends with -backends&quot;)
+	}
+
+	sticky = *useSticky
+
+	for i, raw := range strings.Split(*list, &quot;,&quot;) {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			log.Fatalf(&quot;bad url %s: %v&quot;, raw, err)
+		}
+
+		b := &amp;Backend{ID: i, URL: u, Alive: true}
+		b.Proxy = httputil.NewSingleHostReverseProxy(u)
+
+		// The default transport keeps two idle connections per host, which
+		// capped the proxy at 443 req/s.
+		b.Proxy.Transport = &amp;http.Transport{
+			MaxIdleConns:        512,
+			MaxIdleConnsPerHost: 256,
+			IdleConnTimeout:     90 * time.Second,
+			DialContext: (&amp;net.Dialer{
+				Timeout:   3 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+		}
+
+		// names the backend that answered
+		b.Proxy.ModifyResponse = func(resp *http.Response) error {
+			resp.Header.Set(&quot;X-LB-Backend&quot;, u.Host)
+			return nil
+		}
+
+		// count a refused connection as a failed check
+		b.Proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf(&quot;error from %s: %v&quot;, u, err)
+			mu.Lock()
+			b.fails++
+			if b.fails &gt;= 3 {
+				b.Alive = false
+			}
+			mu.Unlock()
+			http.Error(w, &quot;backend error&quot;, http.StatusBadGateway)
+		}
+
+		backends = append(backends, b)
+		log.Printf(&quot;added backend %s&quot;, u)
+	}
+
+	go healthCheck(*healthPath, 2*time.Second)
+
+	http.HandleFunc(&quot;/lb/health&quot;, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(&quot;ok\n&quot;))
+	})
+	http.HandleFunc(&quot;/lb/status&quot;, statusHandler)
+	http.HandleFunc(&quot;/lb/metrics&quot;, metricsHandler)
+	http.HandleFunc(&quot;/lb/reset&quot;, resetHandler)
+	http.HandleFunc(&quot;/&quot;, proxyHandler)
+
+	if *tlsCert != &quot;&quot; &amp;&amp; *tlsKey != &quot;&quot; {
+		log.Printf(&quot;load balancer running on %s with %d backends (sticky=%v, TLS)&quot;, *listen, len(backends), sticky)
+		log.Fatal(http.ListenAndServeTLS(*listen, *tlsCert, *tlsKey, nil))
+	}
+
+	log.Printf(&quot;load balancer running on %s with %d backends (sticky=%v)&quot;, *listen, len(backends), sticky)
+	log.Fatal(http.ListenAndServe(*listen, nil))
+}</pre>
+<figcaption><b>Figure 2.</b> <span class="mono">lb/main.go</span>, the load balancer as built and run on Sys1.</figcaption>
+</figure>
+
+<h2><span class="num">4.</span>Back end deployment (Sys2, Sys3, Sys4)</h2>
+
+<p>Each system runs the group chat server with the patch below and nothing else changed. Node 24 was
+installed from the official tarball into <span class="mono">~/node</span>, because there is no passwordless sudo
+on these containers and nothing could be installed system wide.</p>
+
+<p>The patch makes two changes. The first attaches the Socket.IO MongoDB adapter so a broadcast from one copy
+reaches clients on the other two. The second adds an <span class="mono">X-Backend</span> header naming the copy,
+so a response can be traced to one machine. The encryption, the signatures, the stored public keys and the rate
+limiter were all left alone.</p>
+
+<figure class="listing">
+<pre>--- server/server.js (previous assignment)
++++ server/server.js (this deployment)
+@@ -9,6 +9,7 @@
+ const { createHealthRouter } = require(&#x27;./src/routes/health&#x27;);
+ const { loadKey } = require(&#x27;./src/crypto/messageCipher&#x27;);
+ const db = require(&#x27;./src/db&#x27;);
++const { createAdapter } = require(&#x27;@socket.io/mongo-adapter&#x27;);
+ 
+ const app = express();
+ const httpServer = createServer(app);
+@@ -18,11 +19,24 @@
+ // that port lets both run at once.
+ const PORT = process.env.PORT || 4000;
+ 
++// Which of the three replicas this is.
++const INSTANCE = process.env.INSTANCE_NAME || &#x27;backend&#x27;;
++
++// Socket.IO holds its connections in one process, so the three replicas pass
++// broadcasts to each other through this capped collection instead.
++const ADAPTER_COLLECTION = &#x27;socket.io-adapter-events&#x27;;
++
+ const presence = new Presence();
+ const messageRateLimiter = new RateLimiter();
+ 
++// Tags every response with the replica that served it.
++app.use((req, res, next) =&gt; {
++  res.setHeader(&#x27;X-Backend&#x27;, INSTANCE);
++  next();
++});
++
+ app.use(express.static(path.join(__dirname, &#x27;..&#x27;, &#x27;client&#x27;, &#x27;dist&#x27;)));
+-app.use(createHealthRouter(presence));
++app.use(createHealthRouter(presence, INSTANCE));
+ 
+ // Connect to the database before listening. If we started listening first, a
+ // client could send a message before the database was ready and that message
+@@ -33,15 +47,28 @@
+   // people are already in the room and that message is lost.
+   loadKey();
+ 
+-  await db.connect();
++  const database = await db.connect();
+   console.log(&#x27;Connected to MongoDB&#x27;);
+ 
++  // Safe to repeat, a second call just reports that it already exists.
++  try {
++    await database.createCollection(ADAPTER_COLLECTION, {
++      capped: true,
++      size: 1e6,
++    });
++  } catch (err) {
++    if (err.codeName !== &#x27;NamespaceExists&#x27;) throw err;
++  }
++
++  io.adapter(createAdapter(database.collection(ADAPTER_COLLECTION)));
++  console.log(`Socket.IO adapter attached (${INSTANCE})`);
++
+   io.on(&#x27;connection&#x27;, (socket) =&gt; {
+     registerSocketHandlers(io, socket, { presence, messageRateLimiter });
+   });
+ 
+   httpServer.listen(PORT, () =&gt; {
+-    console.log(`Chat server running on http://localhost:${PORT}`);
++    console.log(`Chat server ${INSTANCE} running on http://0.0.0.0:${PORT}`);
+   });
+ }
+ </pre>
+<figcaption><b>Figure 3.</b> The full diff against the previous assignment code.</figcaption>
+</figure>
+
+<p>MongoDB runs as a single node replica set because the adapter reads a capped collection using a change stream,
+and change streams need an oplog that a standalone mongod does not have. The same database also holds the chat
+history and the public keys that all three copies share.</p>
+
+<figure>
+<pre class="term">$ ssh stu68_sys2 &#x27;bash ~/start-chat.sh chat-1&#x27;
+UP after 1s
+{&quot;status&quot;:&quot;ok&quot;,&quot;backend&quot;:&quot;chat-1&quot;,&quot;uptimeSeconds&quot;:1,&quot;onlineUsers&quot;:0}
+
+$ for h in sys2 sys3 sys4; do ssh $h &#x27;cat ~/logs/chat.log&#x27;; done
+--- stu68_sys2 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-1)
+Chat server chat-1 running on http://0.0.0.0:4000
+--- stu68_sys3 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-2)
+Chat server chat-2 running on http://0.0.0.0:4000
+--- stu68_sys4 ---
+Connected to MongoDB
+Socket.IO adapter attached (chat-3)
+Chat server chat-3 running on http://0.0.0.0:4000
+
+$ ssh stu68_sys1 &#x27;~/mongodb/bin/mongod ... --replSet rs0&#x27;   # replica set status
+set: rs0  members: 172.17.0.30:27017 = PRIMARY
+messages stored: 121
+a stored record is ciphertext, not text:
+  senderId   : aarav
+  ciphertext : ba/SPIBscbGArOc6R0e94Da019wUxQi1JWx4eyLufF+L...
+  signature  : bfpTMhCMcnmtQLEB1wusTeWM9tLzcPqVHZuBTefCKvQJ...</pre>
+<figcaption><b>Figure 4.</b> Starting the three copies and checking that each one attached the adapter. The last
+part shows that stored messages are ciphertext and not readable text.</figcaption>
+</figure>
+
+<h2><span class="num">5.</span>Load generators (local system)</h2>
+
+<p>Two load generators run on the local PC. Both are worker pools over a fixed number of requests and both write
+the same JSON and CSV. They exist because they measure different things.</p>
+
+<table>
+  <thead><tr><th>Generator</th><th>One request is</th><th>What it measures</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>HTTP</b><br><span class="mono">loadgen_main.go</span></td>
+      <td><span class="mono">GET /health</span></td>
+      <td>The path itself. The back end answers from memory in microseconds, so this measures the proxy and the network rather than the servers.</td>
+    </tr>
+    <tr>
+      <td><b>Chat</b><br><span class="mono">chatload_main.js</span></td>
+      <td>A full chat session opening. It connects over WebSocket, signs the server challenge with ECDSA, logs in and waits for the chat history.</td>
+      <td>The back ends. Before replying, the server decrypts and verifies the signature on all 100 stored messages. This is real CPU work.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The chat generator uses the websocket transport only. A websocket connection is a single request, so each
+session lands on one back end and the split stays even without needing the sticky cookie.</p>
+
+<div class="note plain">
+  <strong>The room holds 120 seeded messages.</strong> History is capped at 100, so every login in the
+  experiments does 100 decrypt and verify operations. An empty room would make that step free and the experiment
+  would only measure the network. The seeded messages are written the way the server writes a live one, so they
+  verify in the same way.
+</div>
+
+<h2><span class="num">6.</span>Experiment 1, load balancer using only Sys2</h2>
+
+<p>The load balancer is started with one back end. The request count, the concurrency, the seeded room and the
+client machine are all the same as in Experiment 2.</p>
+
+<figure>
+<pre class="term"><span class="c">$</span> ssh stu68_sys1 <span class="p">'bash ~/start-lb.sh "http://172.17.0.31:4000" 3000'</span>
+load balancer running on :3000 with <b>1 backends</b> (sticky=true, TLS)</pre>
+<figcaption><b>Figure 5.</b> Setting up Experiment 1.</figcaption>
+</figure>
+
+<figure>
+<pre class="term"><span class="c">$</span> <span class="p">node chatload_main.js -url https://10.1.75.53:3229 -requests 600 -concurrency 30 -experiment chat-1-backend</span>
+{
+  &quot;experiment&quot;: &quot;chat-1-backend&quot;,
+  &quot;requests&quot;: 600,
+  &quot;concurrency&quot;: 30,
+  &quot;successful&quot;: 600,
+  &quot;failed&quot;: 0,
+  &quot;throughput_rps&quot;: 8.73,
+  &quot;dropout_percent&quot;: 0,
+  &quot;p50_ms&quot;: 3405.939,
+  &quot;p95_ms&quot;: 4570.302,
+  &quot;p99_ms&quot;: 5035.758,
+  &quot;elapsed_seconds&quot;: 68.732
+}</pre>
+<figcaption><b>Figure 6.</b> Chat workload. 600 sessions at concurrency 30, all served by Sys2.</figcaption>
+</figure>
+
+<figure>
+<pre class="term"><span class="c">$</span> <span class="p">./client -url https://10.1.75.53:3229/health -requests 5000 -concurrency 40 -timeout 10s -insecure -experiment http-1-backend</span>
+{
+  &quot;experiment&quot;: &quot;http-1-backend&quot;,
+  &quot;requests&quot;: 5000,
+  &quot;concurrency&quot;: 40,
+  &quot;successful&quot;: 5000,
+  &quot;failed&quot;: 0,
+  &quot;throughput_rps&quot;: 725.7798984168378,
+  &quot;dropout_percent&quot;: 0,
+  &quot;p50_ms&quot;: 47.299,
+  &quot;p95_ms&quot;: 112.745,
+  &quot;p99_ms&quot;: 177.633,
+  &quot;elapsed_seconds&quot;: 6.889140924
+}</pre>
+<figcaption><b>Figure 7.</b> HTTP workload. 5000 requests at concurrency 40. This is the median of three
+runs, because this workload varies a lot between runs.</figcaption>
+</figure>
+
+<h2><span class="num">7.</span>Experiment 2, load balancer using all three back ends</h2>
+
+<figure>
+<pre class="term"><span class="c">$</span> ssh stu68_sys1 <span class="p">'bash ~/start-lb.sh "http://172.17.0.31:4000,http://172.17.0.32:4000,http://172.17.0.33:4000" 3000'</span>
+load balancer running on :3000 with <b>3 backends</b> (sticky=true, TLS)</pre>
+<figcaption><b>Figure 8.</b> Same binary and same flags, with three back ends.</figcaption>
+</figure>
+
+<figure>
+<pre class="term"><span class="c">$</span> <span class="p">node chatload_main.js -url https://10.1.75.53:3229 -requests 600 -concurrency 30 -experiment chat-3-backends</span>
+{
+  &quot;experiment&quot;: &quot;chat-3-backends&quot;,
+  &quot;requests&quot;: 600,
+  &quot;concurrency&quot;: 30,
+  &quot;successful&quot;: 600,
+  &quot;failed&quot;: 0,
+  &quot;throughput_rps&quot;: 23.17,
+  &quot;dropout_percent&quot;: 0,
+  &quot;p50_ms&quot;: 1005.477,
+  &quot;p95_ms&quot;: 2488.133,
+  &quot;p99_ms&quot;: 2951.901,
+  &quot;elapsed_seconds&quot;: 25.893
+}</pre>
+<figcaption><b>Figure 9.</b> Chat workload. The same 600 sessions finished in 25.9 s instead of 68.7 s.</figcaption>
+</figure>
+
+<figure>
+<pre class="term"><span class="c">$</span> <span class="p">./client -url https://10.1.75.53:3229/health -requests 5000 -concurrency 40 -timeout 10s -insecure -experiment http-3-backends</span>
+{
+  &quot;experiment&quot;: &quot;http-3-backends&quot;,
+  &quot;requests&quot;: 5000,
+  &quot;concurrency&quot;: 40,
+  &quot;successful&quot;: 5000,
+  &quot;failed&quot;: 0,
+  &quot;throughput_rps&quot;: 643.0598771017376,
+  &quot;dropout_percent&quot;: 0,
+  &quot;p50_ms&quot;: 65.002,
+  &quot;p95_ms&quot;: 164.845,
+  &quot;p99_ms&quot;: 290.241,
+  &quot;elapsed_seconds&quot;: 7.775325717
+}</pre>
+<figcaption><b>Figure 10.</b> HTTP workload, median of three runs. Throughput did not improve. Section 9
+explains why.</figcaption>
+</figure>
+
+<figure>
+<pre class="term"><span class="c">$</span> <span class="p">curl -sk https://10.1.75.53:3229/lb/metrics   # after the chat run</span>
+{
+  &quot;failed&quot;: 0,
+  &quot;p50_ms&quot;: 1089.115,
+  &quot;p95_ms&quot;: 2716.702,
+  &quot;p99_ms&quot;: 3243.199,
+  &quot;per_backend&quot;: {
+    &quot;172.17.0.31:4000&quot;: 200,
+    &quot;172.17.0.32:4000&quot;: 200,
+    &quot;172.17.0.33:4000&quot;: 200
+  },
+  &quot;success&quot;: 600,
+  &quot;total&quot;: 600
+}
+
+<span class="c">$</span> <span class="p">curl -sk https://10.1.75.53:3229/lb/metrics   # after the HTTP run</span>
+{
+  &quot;failed&quot;: 0,
+  &quot;p50_ms&quot;: 15.929,
+  &quot;p95_ms&quot;: 99.103,
+  &quot;p99_ms&quot;: 190.442,
+  &quot;per_backend&quot;: {
+    &quot;172.17.0.31:4000&quot;: 1667,
+    &quot;172.17.0.32:4000&quot;: 1667,
+    &quot;172.17.0.33:4000&quot;: 1666
+  },
+  &quot;success&quot;: 5000,
+  &quot;total&quot;: 5000
+}</pre>
+<figcaption><b>Figure 11.</b> Round robin split 600 chat sessions as 200 each and 5000 HTTP requests as 1667,
+1667 and 1666. Both are within one request of an even three way split.</figcaption>
+</figure>
+
+<h2><span class="num">8.</span>Comparison table</h2>
+
+<h3>Chat workload, 600 sessions, concurrency 30</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Experiment</th><th class="num">Requests</th><th class="num">Success</th><th class="num">Failed</th>
+      <th class="num">Throughput</th><th class="num">Dropout</th><th class="num">p50</th><th class="num">p95</th>
+      <th class="num">p99</th><th class="num">Elapsed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>1. Sys2 only</b></td><td class="num">600</td><td class="num">600</td><td class="num">0</td>
+      <td class="num">8.73 rps</td><td class="num">0.0%</td><td class="num">3405.9 ms</td>
+      <td class="num">4570.3 ms</td><td class="num">5035.8 ms</td><td class="num">68.7 s</td>
+    </tr>
+    <tr>
+      <td><b>2. Sys2, Sys3 and Sys4</b></td><td class="num">600</td><td class="num">600</td><td class="num">0</td>
+      <td class="num">23.17 rps</td><td class="num">0.0%</td><td class="num">1005.5 ms</td>
+      <td class="num">2488.1 ms</td><td class="num">2951.9 ms</td><td class="num">25.9 s</td>
+    </tr>
+    <tr class="total">
+      <td>Change</td><td class="num">-</td><td class="num">-</td><td class="num">-</td>
+      <td class="num up">2.7x faster</td><td class="num">-</td><td class="num down">-70.5%</td>
+      <td class="num down">-45.6%</td><td class="num down">-41.4%</td><td class="num down">-62.3%</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>HTTP workload, 5000 requests, concurrency 40, median of three runs</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Experiment</th><th class="num">Requests</th><th class="num">Success</th><th class="num">Failed</th>
+      <th class="num">Throughput</th><th class="num">Dropout</th><th class="num">p50</th><th class="num">p95</th>
+      <th class="num">p99</th><th class="num">p50 at LB</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>1. Sys2 only</b></td><td class="num">5000</td><td class="num">5000</td><td class="num">0</td>
+      <td class="num">725.8 rps</td><td class="num">0.0%</td><td class="num">47.3 ms</td>
+      <td class="num">112.7 ms</td><td class="num">177.6 ms</td><td class="num">30.1 ms</td>
+    </tr>
+    <tr>
+      <td><b>2. Sys2, Sys3 and Sys4</b></td><td class="num">5000</td><td class="num">5000</td><td class="num">0</td>
+      <td class="num">643.1 rps</td><td class="num">0.0%</td><td class="num">65.0 ms</td>
+      <td class="num">164.8 ms</td><td class="num">290.2 ms</td><td class="num">15.9 ms</td>
+    </tr>
+    <tr class="total">
+      <td>Change</td><td class="num">-</td><td class="num">-</td><td class="num">-</td>
+      <td class="num flat">-11.4%<br><span style="font-weight:400;font-size:0.9em">within noise</span></td>
+      <td class="num">-</td><td class="num">+37.4%</td><td class="num">+46.2%</td>
+      <td class="num">+63.4%</td><td class="num down">-47.2%</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2><span class="num">9.</span>Observations</h2>
+
+<p>The chat workload scales with the number of back ends. Three back ends served the same 600 sessions 2.7 times
+faster. The median latency dropped by 71% and the p99 tail dropped by 41%. Both runs finished with zero failures,
+so this is a result about capacity and latency and not about errors. The work here is CPU bound on the back ends.
+Each login decrypts and verifies 100 stored messages on a single vCPU. Spreading 30 concurrent clients over three
+machines gives each machine about a third of the work. The gap below a perfect 3x is the time spent in the load
+balancer and in the shared database, which both sit on Sys1 and are not replicated.</p>
+
+<p>The HTTP workload does not separate the two setups. This is the expected result and not a broken measurement.
+A <span class="mono">GET /health</span> costs the back end almost nothing, so the back ends are not the limit.
+The limit is the single vCPU on Sys1, which the load balancer shares with mongod and which also handles TLS.
+Adding back ends does not raise that limit. Each setup was run three times to check this. One back end gave 611.9,
+725.8 and 729.3 rps. Three back ends gave 643.1, 602.3 and 865.6 rps. The two ranges overlap completely, so the
+11% gap between the medians in the table means nothing.</p>
+
+<p>The back ends really were less loaded even so. The proof is on the load balancer side of the hop, where the
+measured p50 dropped from 30.1 ms to 15.9 ms. The back ends answered in half the time, and none of that reached
+the client. This is the point the comparison was meant to show. A load balancer only adds throughput when the
+back ends are the bottleneck. On a cheap request the proxy is the bottleneck instead, and extra machines add
+nothing.</p>
+
+<p>The client side tail got worse on the HTTP run, rising from 113 to 165 ms at p95 and from 178 to 290 ms at
+p99. With three back ends the proxy keeps three connection pools instead of one and runs three health checks per
+interval instead of one, on a vCPU that was already full. This is a real cost of spreading out and it shows up
+only because this workload has no other bottleneck to hide it.</p>
+
+<h2><span class="num">10.</span>Health checks and failover</h2>
+
+<p>The health check loop polls every back end every 2 seconds and marks one down after three failures in a row.
+The test below stops the chat server on Sys3 while traffic is running, then starts it again.</p>
+
+<figure class="listing">
+<pre class="term">### 1. all three backends healthy ###
+  http://172.17.0.31:4000    alive=True  served=0
+  http://172.17.0.32:4000    alive=True  served=0
+  http://172.17.0.33:4000    alive=True  served=0
+
+### 2. six requests, all backends up, strict round robin ###
+  request 1  -&gt; 200  served by 172.17.0.31:4000
+  request 2  -&gt; 200  served by 172.17.0.32:4000
+  request 3  -&gt; 200  served by 172.17.0.33:4000
+  request 4  -&gt; 200  served by 172.17.0.31:4000
+  request 5  -&gt; 200  served by 172.17.0.32:4000
+  request 6  -&gt; 200  served by 172.17.0.33:4000
+
+### 3. stop the chat server on Sys3 (172.17.0.32) ###
+  killed chat-2 (pid 20068) on Sys3
+  waiting 8s. The health check runs every 2s and needs 3 misses in a row.
+  http://172.17.0.31:4000    alive=True  served=2
+  http://172.17.0.32:4000    alive=False served=2
+  http://172.17.0.33:4000    alive=True  served=2
+
+### 4. six more requests with Sys3 down, no failures, Sys3 skipped ###
+  request 1  -&gt; 200  served by 172.17.0.31:4000
+  request 2  -&gt; 200  served by 172.17.0.33:4000
+  request 3  -&gt; 200  served by 172.17.0.31:4000
+  request 4  -&gt; 200  served by 172.17.0.33:4000
+  request 5  -&gt; 200  served by 172.17.0.31:4000
+  request 6  -&gt; 200  served by 172.17.0.33:4000
+
+### 5. restart the chat server on Sys3 ###
+UP after 1s
+{&quot;status&quot;:&quot;ok&quot;,&quot;backend&quot;:&quot;chat-2&quot;,&quot;uptimeSeconds&quot;:1,&quot;onlineUsers&quot;:0}
+  waiting 6s...
+  http://172.17.0.31:4000    alive=True  served=5
+  http://172.17.0.32:4000    alive=True  served=2
+  http://172.17.0.33:4000    alive=True  served=5
+
+### 6. six requests after recovery, Sys3 is back in the rotation ###
+  request 1  -&gt; 200  served by 172.17.0.31:4000
+  request 2  -&gt; 200  served by 172.17.0.32:4000
+  request 3  -&gt; 200  served by 172.17.0.33:4000
+  request 4  -&gt; 200  served by 172.17.0.31:4000
+  request 5  -&gt; 200  served by 172.17.0.32:4000
+  request 6  -&gt; 200  served by 172.17.0.33:4000
+
+### 7. load balancer log ###
+2026/08/24 15:41:06 http: TLS handshake error from 10.50.19.28:37334: remote error: tls: unknown certificate
+2026/08/24 15:41:39 http://172.17.0.32:4000 marked down after 3 failed checks: Get &quot;http://172.17.0.32:4000/health&quot;: dial tcp 172.17.0.32:4000: connect: connection refused
+2026/08/24 15:41:43 http://172.17.0.32:4000 is back up</pre>
+<figcaption><b>Figure 12.</b> A back end failing and recovering. Round robin narrows from three machines to two
+and then goes back to three. No client request failed while Sys3 was down.</figcaption>
+</figure>
+
+<h2><span class="num">11.</span>The group chat application through the load balancer</h2>
+
+<p>The assignment asks for the group chat application to be reached through the load balancer.
+<a href="https://10.1.75.53:3229">https://10.1.75.53:3229</a> serves the chat application and every request to it
+is passed to one of the three copies on Sys2, Sys3 and Sys4.</p>
+
+<p>Getting a real time application to work correctly behind a round robin proxy needed the three pieces described
+in Section 2. The test below checks all three against the live URL.</p>
+
+<ol>
+  <li>Two clients are put on different back ends and each one runs the real ECDSA login.</li>
+  <li>One sends a signed message and the other receives it. This only works if the broadcast crossed machines,
+  which means the MongoDB adapter is working.</li>
+  <li>A third client on the remaining back end loads history from the shared database and gets the message back.
+  It decrypts, and both the integrity tag and the signature verify. This shows the encryption key and the stored
+  public keys are shared across all three copies.</li>
+</ol>
+
+<figure>
+<pre class="term">ananya is pinned to backend 0 -&gt; chat-1
+vikram is pinned to backend 2 -&gt; chat-3
+ananya logged in
+vikram logged in
+ananya sent: &quot;does this reach the other back end&quot;
+vikram received: &quot;does this reach the other back end&quot;
+  message id      : 6a8c64f538dab9484ee91fc8
+  signature check : valid
+  stored ciphertext (first 32 chars): X5Yd046DE1hNbznXyKLIvyF5T33fdOsE...
+meera  is pinned to backend 1 -&gt; chat-2
+meera loaded 100 messages of history from the shared database
+  ananya&#x27;s message present : yes
+  decrypted text           : &quot;does this reach the other back end&quot;
+  integrity verdict        : ok
+  signature verdict        : valid
+
+RESULT: PASS. Chat works across all three back ends behind the load balancer.</pre>
+<figcaption><b>Figure 13.</b> The security properties of the group chat application still hold after moving to
+three copies behind the load balancer.</figcaption>
+</figure>
+
+<div class="note">
+  <strong>About the group deployment.</strong> The previous assignment was a group submission and its public URL
+  runs on a separate container that this account has no access to. This report does not touch it. What is shown
+  here is a separate working deployment of the same chat back end behind this assignment load balancer, on
+  the four systems allocated to me.
+</div>
+
+</body>
+</html>

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Performance-Based Load Balancing for the Group Chat Application</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="eyebrow">CS559 Cloud and Systems Design &middot; Assignment: performance-based load balancing</div>
+
+<h1>Routing by how loaded each machine actually is</h1>
+<p class="subtitle">The secure group chat from the previous assignment, running on three lab
+machines behind a load balancer that measures each of them several times a second and sends every
+request to the least loaded one still under a threshold. With the threshold chosen by measurement
+rather than by guess.</p>
+
+<div class="meta">
+  <div><dt>Name</dt><dd>Akshat Gupta</dd></div>
+  <div><dt>Roll number</dt><dd>12340160</dd></div>
+  <div><dt>Systems</dt><dd>stu68_sys1&ndash;4</dd></div>
+  <div><dt>Report date</dt><dd>{{DATE}}</dd></div>
+</div>
+
+<div class="urlbox">
+  <div class="urllabel">HTTP API endpoint</div>
+  <a class="urllink" href="http://10.1.75.53:4229">http://10.1.75.53:4229</a>
+  <p class="urlnote">
+    <code>POST /message</code> with <code>client-name</code> and <code>msg</code>,
+    <code>GET /feed</code> for the whole room. Plain HTTP, so a load generator needs no
+    certificate handling. The same balancer also serves the browser chat over HTTPS at
+    <a href="https://10.1.75.53:3229">https://10.1.75.53:3229</a>, where the self-signed
+    certificate has to be accepted once; that is unchanged from the previous submission and the
+    two ports are the same process.
+  </p>
+</div>
+
+<h2><span class="num">1</span>What this had to do, and what it does</h2>
+
+<p>The previous assignment put the group chat behind a load balancer that rotated between three
+copies of the back end. This one keeps that deployment and changes the part that decides where a
+request goes, adds the two HTTP routes the assignment specifies, and makes duplicate messages
+impossible rather than unlikely.</p>
+
+<table>
+  <thead><tr><th>What was asked</th><th>What was built</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td>Back end on the three allotted systems, reached only through the balancer</td>
+        <td>Three copies of the chat back end on Sys2, Sys3 and Sys4; the balancer on Sys1 is the
+            only address a client is given</td><td>Section 2</td></tr>
+    <tr><td>Routing that follows system performance, not a fixed rotation</td>
+        <td>Each back end reports its CPU, event loop delay and write queue; the balancer combines
+            them into one score and routes on it</td><td>Section 5</td></tr>
+    <tr><td>Traffic switches away from a back end that crosses a threshold</td>
+        <td>A back end over the threshold is taken out of rotation until it comes back under it,
+            with hysteresis so it does not flap</td><td>Section 5</td></tr>
+    <tr><td>Unhealthy back ends detected and avoided</td>
+        <td>Probed every 300&nbsp;ms, marked down after three failures, brought back after two
+            good probes; a request that fails mid-flight is replayed on another back end</td>
+        <td>Section 5, Section 9</td></tr>
+    <tr><td>The threshold optimised</td>
+        <td>Nine routing configurations measured under identical load, three runs each</td>
+        <td>Section 6</td></tr>
+    <tr><td>Shared persistent storage, unique message ids, no duplicates</td>
+        <td>One MongoDB replica set behind all three back ends, a unique index on the message id,
+            and an id assigned before the request is forwarded so a replay cannot duplicate</td>
+        <td>Section 4</td></tr>
+    <tr><td><code>/message</code> and <code>/feed</code> at exactly those paths</td>
+        <td>Both, accepting JSON, form encoding or a query string</td><td>Section 3</td></tr>
+    <tr><td>A load generator with variable users, message lengths and intervals</td>
+        <td>Written for this assignment, and used for every number in this report</td>
+        <td>Section 7</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Nothing was removed to make the numbers look better.</strong> The browser chat still
+  signs every message with a key the client proves it holds, still stores only ciphertext, and
+  still re-verifies both when history is loaded. The HTTP routes write into the same room as that
+  chat rather than into a simpler store beside it, and messages arriving over HTTP are encrypted
+  before they are stored exactly as the others are. What an HTTP caller cannot do is present a
+  signature, so its messages are stored unsigned and reported as unsigned, which is the same
+  verdict the existing client already shows for a message it cannot attribute.
+</div>
+
+<h2><span class="num">2</span>The deployment</h2>
+
+<div class="diagram">{{DIAGRAM}}</div>
+
+<p>Three things moved since the previous submission.</p>
+
+<p><b>The database is on Sys4 now, not Sys1.</b> On 31 August the MongoDB process on Sys1 was
+killed by the kernel's out-of-memory killer and nothing restarted it, so the chat had been broken
+for over a week before this assignment started. Sys1's cgroup had recorded 57 out-of-memory kills;
+it is a 512&nbsp;MB container that had also been given an unrelated project's service to run.
+Putting the database back into it would have meant one of the two dying again: even after the
+tuning in section 10 it wants about 300&nbsp;MB. Sys4 had never had an out-of-memory kill and had
+roughly 400&nbsp;MB spare, so the database was moved there with its data. That decision costs something, and section 10 measures what.</p>
+
+<p><b>The balancer listens on two ports.</b> Plain HTTP on 4229 for the API, HTTPS on 3229 for the
+browser. The chat client needs a secure origin because it signs its login with WebCrypto, which
+browsers only expose over HTTPS, so that port cannot become plain HTTP without breaking the
+previous submission. An API client, on the other hand, should not have to be told to ignore a
+self-signed certificate. Both ports are served by the same process from the same handler.</p>
+
+<p><b>Every service is supervised.</b> Nothing here runs as a system service, because these
+containers have no init system and no passwordless sudo, and the previous deployment's answer was
+<code>nohup</code>, which is how a dead database went unnoticed for a week. Each service now runs
+under a small supervisor loop that restarts it when it exits.</p>
+
+<figure>
+<pre class="compact">{{INVENTORY}}</pre>
+<figcaption><b>What is running where.</b> Read from the machines, not from notes.</figcaption>
+</figure>
+
+<h2><span class="num">3</span>The two routes</h2>
+
+<p><code>/message</code> takes <code>client-name</code> and <code>msg</code>. Those exact spellings
+are what the assignment specifies and what the examples below use. They are accepted in a JSON
+body, in a form-encoded body or in the query string, because the grading load generator is not
+ours and a request that plainly carries a message should be stored rather than argued with. For
+the same reason a few obvious alternatives (<code>client_name</code>, <code>message</code>,
+<code>text</code>) are accepted, and so is <code>GET /message</code>. A GET that writes is not how
+this would be designed from scratch; it is here so that a generator which uses one is not turned
+away.</p>
+
+<p><code>/feed</code> returns every message in the room as a JSON array, oldest first, each entry
+carrying the id, the <code>client-name</code>, the <code>msg</code> and a timestamp.</p>
+
+<figure>
+<pre class="term">{{ROUTES_DEMO}}</pre>
+<figcaption><b>All four ways in, and the feed they land in.</b> Each response names the back end
+that served it, and the three requests went to different machines without the client knowing or
+caring.</figcaption>
+</figure>
+
+<h2><span class="num">4</span>Persistence, and why a duplicate cannot happen</h2>
+
+<p>All three back ends read and write one MongoDB replica set, so there is one history rather than
+three. Each back end also keeps that history in memory, because <code>/feed</code> has to return
+the whole room and reading and decrypting the collection on every request would get slower for as
+long as the deployment lived. The in-memory copy is filled once at startup, appended to when this
+back end accepts a message, and kept level with the other two by a change stream on the
+collection.</p>
+
+<p>Duplicate suppression is three things working together, and the first is the one that matters:</p>
+
+<ol>
+  <li><b>A unique index on the message id.</b> Every message carries one, and MongoDB refuses the
+      second write of an id it already holds. This is a property of the database, not a promise
+      made by the application, so it holds no matter which back end the second copy arrives at or
+      how far apart in time the two arrive.</li>
+  <li><b>The id is assigned before the request is forwarded.</b> If a caller supplies an id, that
+      one is used. If not, the load balancer stamps one on. That ordering is what makes it safe for
+      the balancer to replay a request onto a second back end when the first fails mid-request:
+      both copies carry the same id, so at most one is stored.</li>
+  <li><b>A duplicate is a success, not an error.</b> The second write returns 200 with
+      <code>"duplicate": true</code>, so a client retrying after a timeout gets a clean answer
+      instead of an error that invites it to retry again.</li>
+</ol>
+
+<figure>
+<pre class="term">{{DUPLICATE_DEMO}}</pre>
+<figcaption><b>The same id sent twice.</b> One row in the feed, and the second request is told why.
+The load generator checks this at the end of every run from the outside: it looks for every id it
+sent in <code>/feed</code> and fails the run if any is missing or appears twice.</figcaption>
+</figure>
+
+<h3>The browser chat, still working</h3>
+
+<p>The same room is reachable the other way, and that path is unchanged. Three clients are pinned
+to the three different back ends with the sticky cookie, one sends a signed message, another has to
+receive it, and a third reads it back out of the shared history. The cookie is honoured only on
+Socket.IO paths, because that handshake is several requests that one process has to answer;
+<code>/message</code> and <code>/feed</code> are stateless and are deliberately left free to move
+to whichever machine is least loaded.</p>
+
+<figure>
+<pre class="term">{{CROSS_REPLICA}}</pre>
+<figcaption><b>A message crossing machines, and surviving a reload.</b> The signature verifies on
+the way in and again when history is loaded, and what is on disk is ciphertext.</figcaption>
+</figure>
+
+<h2><span class="num">5</span>How the balancer chooses</h2>
+
+<p>Every 300&nbsp;ms the balancer asks each back end how loaded it is. Asking rather than guessing
+matters, because the balancer cannot see from outside whether a back end is slow because it is out
+of CPU or because it is waiting on the database, and those want opposite responses.</p>
+
+<h3>The signals</h3>
+
+<table>
+  <thead><tr><th>Signal</th><th>Where it comes from</th><th>What it catches that the others miss</th></tr></thead>
+  <tbody>
+    <tr><td>CPU</td><td>The container's own cgroup, as a fraction of the one core it is allowed</td>
+        <td>The headline measure. It has to come from the cgroup: <code>/proc</code> inside these
+            containers describes the host's 120 cores, none of which they may use.</td></tr>
+    <tr><td>Event loop delay</td><td>Node's own event loop histogram</td>
+        <td>A back end waiting on the database sits at low CPU with a growing queue. Only this
+            notices.</td></tr>
+    <tr><td>Write queue depth</td><td>The batching writer</td>
+        <td>Pressure that has reached the database rather than the back end.</td></tr>
+    <tr><td>Recent latency</td><td>Measured by the balancer itself</td>
+        <td>Everything the back end does not report, including the network between them.</td></tr>
+    <tr><td>Requests in flight</td><td>Counted by the balancer, per request</td>
+        <td>The only signal that moves between two probes. It is what stops a burst arriving in
+            that gap from piling onto whichever back end looked best 300&nbsp;ms ago.</td></tr>
+  </tbody>
+</table>
+
+<p>The first four are combined into one score between 0 and 1, weighted 0.50 CPU, 0.20 event loop,
+0.15 latency, 0.15 queue, and smoothed so that one unlucky probe does not move traffic on its own.
+The in-flight count is folded in per request, at a quarter weight.</p>
+
+<h3>The decision</h3>
+
+<p>A back end whose score is over the threshold is set aside and receives nothing until it comes
+back under it by a clear margin. Among the back ends still under the threshold, each request goes
+to one chosen in proportion to how much headroom it has left: at a threshold of 0.60 a back end
+scoring 0.10 has five times the headroom of one scoring 0.50, and receives roughly five times the
+traffic.</p>
+
+<p>Weighting rather than simply always taking the lowest score is a change that measurement forced.
+Always taking the minimum starves a machine that is merely second best: Sys4 also runs the
+database, so its CPU is permanently higher than the other two, and under a strict minimum it
+received no traffic at all while it still had most of a core spare. Worse, a strict minimum
+oscillates, because between two probes every request sees the same minimum and they all go to it.
+Section 6 measures both of these.</p>
+
+<div class="note plain">
+  <strong>If every back end is over the threshold</strong>, the request still has to go somewhere,
+  so it goes to the least loaded of them. The threshold decides where traffic prefers to go, never
+  whether the service answers.
+</div>
+
+<h3>Health</h3>
+
+<p>The same 300&nbsp;ms probe is the health check: a back end that fails three in a row is marked
+down and receives nothing, and it is marked up again after two good ones. A request that fails
+against a back end also counts, so a machine that stops answering is noticed by real traffic rather
+than only at the next probe. Because nothing has been written to the client at that point, the
+request is replayed on another back end, carrying the same message id, and the client sees a normal
+response. Section 9 kills a back end mid-run to show this.</p>
+
+<h2><span class="num">6</span>Choosing the threshold</h2>
+
+<p>Nine configurations, the same workload from the same generator, three runs each, and the whole
+database reset between runs so that a later run never starts with more history to index than an
+earlier one. The median of the three is reported.</p>
+
+{{SWEEP_TABLE}}
+
+<div class="figure">{{SWEEP_FIG}}</div>
+<div class="figure">{{SWEEP_DIST_FIG}}</div>
+
+{{SWEEP_COMMENTARY}}
+
+<h2><span class="num">7</span>The load generator</h2>
+
+<p>Written for this assignment, in Go, and used for every measurement in this report. It models
+users rather than requests: each virtual user is a goroutine that waits a random interval, sends a
+message of random length, and now and then reads the feed instead. The three things the assignment
+asks to vary are flags.</p>
+
+<figure>
+<pre>{{LOADGEN_USAGE}}</pre>
+<figcaption><b>The flags.</b> <code>-verify</code> is the one that checks the run rather than
+timing it.</figcaption>
+</figure>
+
+<p>It writes a JSON summary and a per-second CSV, and the report's figures are drawn from those
+files, so a figure cannot disagree with the run that produced it. Utilisation is sampled separately
+by a script that runs on each container rather than over ssh, because a sample taken over ssh
+measures the ssh as well. Each sample carries a wall-clock timestamp, which is what lets the four
+machines' traces be lined up with the load run rather than assumed to have started together.</p>
+
+<h2><span class="num">8</span>What it does under load</h2>
+
+{{HEADLINE_TABLE}}
+
+<div class="figure">{{RESPONSE_FIG}}</div>
+
+<p>The four machines during the same run. Sys2 and Sys3 run a back end each; Sys4 runs a back end
+and the database; Sys1 runs the balancer, and also the unrelated service that is the reason the
+database is not there.</p>
+
+<div class="figure">{{UTILISATION_FIG}}</div>
+
+<p>And what the balancer was doing while that happened. The upper panel is each back end's score
+against the threshold; the lower one is the traffic each was actually given.</p>
+
+<div class="figure">{{ROUTING_FIG}}</div>
+
+{{ROUTING_COMMENTARY}}
+
+<h2><span class="num">9</span>Killing a back end on purpose</h2>
+
+<p>Steady load through the balancer, one back end stopped a third of the way in and started again
+two thirds of the way in, and no client told about any of it.</p>
+
+{{FAILOVER_SUMMARY}}
+
+<div class="figure">{{FAILOVER_ROUTING_FIG}}</div>
+<div class="figure">{{FAILOVER_FIG}}</div>
+
+<figure>
+<pre class="term">{{FAILOVER_LOG}}</pre>
+<figcaption><b>What the balancer logged.</b></figcaption>
+</figure>
+
+<h2><span class="num">10</span>What limits it</h2>
+
+{{BOTTLENECK}}
+
+<h2><span class="num">11</span>Running it</h2>
+
+<figure>
+<pre>{{OPERATIONS}}</pre>
+<figcaption><b>Deployment and experiments.</b> The deploy script is idempotent, so it is also the
+way back after a container restart.</figcaption>
+</figure>
+
+<figure>
+<pre>{{FILE_MAP}}</pre>
+<figcaption><b>What is where in the repository.</b></figcaption>
+</figure>
+
+<h2 class="page-break"><span class="num">12</span>The load balancer</h2>
+
+<figure class="listing"><pre>{{LB_SOURCE}}</pre>
+<figcaption><b>sources/lb/main.go</b></figcaption></figure>
+
+<h2 class="page-break"><span class="num">13</span>The two routes, and what they write to</h2>
+
+<figure class="listing"><pre>{{ROUTER_SOURCE}}</pre>
+<figcaption><b>sources/server/src/api/router.js</b></figcaption></figure>
+
+<figure class="listing"><pre>{{WRITEQUEUE_SOURCE}}</pre>
+<figcaption><b>sources/server/src/api/writeQueue.js</b></figcaption></figure>
+
+<figure class="listing"><pre>{{FEEDSTORE_SOURCE}}</pre>
+<figcaption><b>sources/server/src/api/feedStore.js</b></figcaption></figure>
+
+<figure class="listing"><pre>{{LOADMETRICS_SOURCE}}</pre>
+<figcaption><b>sources/server/src/api/loadMetrics.js</b></figcaption></figure>
+
+<h2 class="page-break"><span class="num">14</span>The load generator</h2>
+
+<figure class="listing"><pre>{{LOADGEN_SOURCE}}</pre>
+<figcaption><b>sources/loadgen/main.go</b></figcaption></figure>
+
+<footer class="report-end">
+Akshat Gupta, 12340160. Every number in this report was measured on stu68_sys1&ndash;4 by the load
+generator in section 7, and every figure is drawn from the files those runs produced.
+</footer>
+
+</body>
+</html>
